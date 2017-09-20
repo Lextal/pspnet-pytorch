@@ -5,6 +5,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
 from pspnet import PSPNet
+from extractors import __all__
 
 import logging
 import click
@@ -23,9 +24,12 @@ def lr_poly(base_lr, epoch, max_epoch, power):
     return max(0.00001, base_lr * np.power(1. - epoch / max_epoch, power))
 
 
-def build_network(snapshot):
+def build_network(snapshot, backend):
     epoch = 0
-    net = PSPNet()
+    backend = backend.lower()
+    net = None
+    if backend.startswith('resnet'):
+        net = PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend=backend)
     net = nn.DataParallel(net)
     if snapshot is not None:
         _, epoch = os.path.basename(snapshot).split('_')
@@ -39,6 +43,8 @@ def build_network(snapshot):
 @click.command()
 @click.option('--data-path', type=str, help='Path to dataset with directories imgs/ maps/')
 @click.option('--models-path', type=str, help='Path for storing model snapshots')
+@click.option('--extractor', type=str, default='resnet34',
+              help='The network to use for feature extraction, valid options: {}'.format(', '.join(__all__)))
 @click.option('--snapshot', type=str, default=None, help='Path to pretrained weights')
 @click.option('--crop_x', type=int, default=200)
 @click.option('--crop_y', type=int, default=300)
@@ -48,9 +54,10 @@ def build_network(snapshot):
 @click.option('--gpu', type=str, default='0')
 @click.option('--start-lr', type=float, default=0.01)
 @click.option('--lr-power', type=float, default=0.9)
-def train(data_path, models_path, snapshot, crop_x, crop_y, batch_size, alpha, epochs, start_lr, lr_power, gpu):
+def train(data_path, models_path, extractor, snapshot, crop_x, crop_y, batch_size, alpha, epochs, start_lr, lr_power,
+          gpu):
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu
-    net, starting_epoch = build_network(snapshot)
+    net, starting_epoch = build_network(snapshot, extractor)
     steps = 0
 
     for epoch in range(starting_epoch, starting_epoch + epochs):
