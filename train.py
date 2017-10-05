@@ -1,36 +1,32 @@
-import torch
 from torch import nn
 from torch import optim
+from torch.optim.lr_scheduler import MultiStepLR
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
 from pspnet import PSPNet
-from extractors import __all__
 
-import logging
+from tqdm import tqdm
 import click
 import os
 import numpy as np
 
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-
-def weights_log(class_freq):
-    weights = torch.log1p(1 / class_freq)
-    return weights / torch.sum(weights)
-
-
-def lr_poly(base_lr, epoch, max_epoch, power):
-    return max(0.00001, base_lr * np.power(1. - epoch / max_epoch, power))
+models = {
+    'squeezenet': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='squeezenet'),
+    'densenet': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=1024, deep_features_size=512, backend='densenet'),
+    'resnet18': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet18'),
+    'resnet34': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=512, deep_features_size=256, backend='resnet34'),
+    'resnet50': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet50'),
+    'resnet101': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet101'),
+    'resnet152': lambda: PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet152')
+}
 
 
 def build_network(snapshot, backend):
     epoch = 0
     backend = backend.lower()
-    net = None
-    if backend.startswith('resnet'):
-        net = PSPNet(sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend=backend)
-    net = nn.DataParallel(net)
+    net = models[backend]()
     if snapshot is not None:
         _, epoch = os.path.basename(snapshot).split('_')
         epoch = int(epoch)
@@ -41,55 +37,60 @@ def build_network(snapshot, backend):
 
 
 @click.command()
-@click.option('--data-path', type=str, help='Path to dataset with directories imgs/ maps/')
+@click.option('--data-path', type=str, help='Path to dataset folder')
 @click.option('--models-path', type=str, help='Path for storing model snapshots')
-@click.option('--extractor', type=str, default='resnet34',
-              help='The network to use for feature extraction, valid options: {}'.format(', '.join(__all__)))
+@click.option('--backend', type=str, default='resnet34', help='Feature extractor')
 @click.option('--snapshot', type=str, default=None, help='Path to pretrained weights')
-@click.option('--crop_x', type=int, default=200)
-@click.option('--crop_y', type=int, default=300)
-@click.option('--batch-size', type=int, default=1)
-@click.option('--alpha', type=float, default=5.0, help='Coefficient for classification loss term')
+@click.option('--crop_x', type=int, default=256, help='Horizontal random crop size')
+@click.option('--crop_y', type=int, default=256, help='Vertical random crop size')
+@click.option('--batch-size', type=int, default=16)
+@click.option('--alpha', type=float, default=1.0, help='Coefficient for classification loss term')
 @click.option('--epochs', type=int, default=20, help='Number of training epochs to run')
-@click.option('--gpu', type=str, default='0')
-@click.option('--start-lr', type=float, default=0.01)
-@click.option('--lr-power', type=float, default=0.9)
-def train(data_path, models_path, extractor, snapshot, crop_x, crop_y, batch_size, alpha, epochs, start_lr, lr_power,
-          gpu):
+@click.option('--gpu', type=str, default='0', help='List of GPUs for parallel training, e.g. 0,1,2,3')
+@click.option('--start-lr', type=float, default=0.001)
+@click.option('--milestones', type=str, default='10,20,30', help='Milestones for LR decreasing')
+def train(data_path, models_path, backend, snapshot, crop_x, crop_y, batch_size, alpha, epochs, start_lr, milestones, gpu):
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu
-    net, starting_epoch = build_network(snapshot, extractor)
-    steps = 0
-
+    net, starting_epoch = build_network(snapshot, backend)
+    data_path = os.path.abspath(os.path.expanduser(data_path))
+    models_path = os.path.abspath(os.path.expanduser(models_path))
+    os.makedirs(models_path, exist_ok=True)
+    
+    '''
+        To follow this training routine you need a DataLoader that yields the tuples of the following format:
+        (Bx3xHxW FloatTensor x, BxHxW LongTensor y, BxN LongTensor y_cls) where
+        x - batch of input images,
+        y - batch of groung truth seg maps,
+        y_cls - batch of 1D tensors of dimensionality N: N total number of classes, 
+        y_cls[i, T] = 1 if class T is present in image i, 0 otherwise
+    '''
+    train_loader, class_weights, n_images = None, None, None
+    
+    optimizer = optim.Adam(net.parameters(), lr=start_lr)
+    scheduler = MultiStepLR(optimizer, milestones=[int(x) for x in milestones.split(',')])
+    
     for epoch in range(starting_epoch, starting_epoch + epochs):
-
-        # You have to load all this stuff by yourself
-        # class_weights is simply a 1d normalized Tensor
-        # n_images is used to calculate the "poly" LR
-
-        loader, class_weights, n_images = None, None, None
-
-        n_images *= epochs
-        seg_criterion = nn.NLLLoss2d(weight=class_weights.cuda())
+        seg_criterion = nn.NLLLoss2d(weight=class_weights)
         cls_criterion = nn.BCEWithLogitsLoss(weight=class_weights)
         epoch_losses = []
-        for x, y, y_cls in loader:
+        train_iterator = tqdm(loader, total=max_steps // batch_size + 1)
+        net.train()
+        for x, y, y_cls in train_iterator:
             steps += batch_size
-            lr = lr_poly(start_lr, steps, n_images, lr_power)
-            optimizer = optim.Adam(net.parameters(), lr=lr)
             optimizer.zero_grad()
-            x = Variable(x).cuda()
-            y = Variable(y).cuda()
-            y_cls = Variable(y_cls).cuda()
+            x, y, y_cls = Variable(x).cuda(), Variable(y).cuda(), Variable(y_cls).cuda()
             out, out_cls = net(x)
             seg_loss, cls_loss = seg_criterion(out, y), cls_criterion(out_cls, y_cls)
             loss = seg_loss + alpha * cls_loss
-            logging.info(
-                'Step {4}/{5} : Seg loss = {0:0.5f}, Cls loss = {1:0.5f}, Total = {2:0.5f}, LR = {3:0.5f}'.format(
-                    seg_loss.data[0], cls_loss.data[0], loss.data[0], lr, steps, n_images))
+            epoch_losses.append(loss.data[0])
+            status = '[{0}] loss = {1:0.5f} avg = {2:0.5f}, LR = {5:0.7f}'.format(
+                epoch + 1, loss.data[0], np.mean(epoch_losses), scheduler.get_lr()[0])
+            train_iterator.set_description(status)
             loss.backward()
             optimizer.step()
-        logging.info('Epoch = {0}, Loss = {1:0.5f}'.format(epoch, np.mean(epoch_losses)))
-        torch.save(net.state_dict(), os.path.join(models_path, '_'.join(["PSPNet", str(epoch)])))
+        scheduler.step()
+        torch.save(net.state_dict(), os.path.join(models_path, '_'.join(["PSPNet", str(epoch + 1)])))
+        train_loss = np.mean(epoch_losses)
 
 
 if __name__ == '__main__':
