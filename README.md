@@ -32,8 +32,13 @@ Planned:
 ### Usage 
 
 To follow the training routine in train.py you need a DataLoader that yields the tuples of the following format:
+
 (Bx3xHxW FloatTensor x, BxHxW LongTensor y, BxN LongTensor y\_cls) where
+
 x - batch of input images,
+
 y - batch of groung truth seg maps,
+
 y\_cls - batch of 1D tensors of dimensionality N: N total number of classes, 
+
 y\_cls[i, T] = 1 if class T is present in image i, 0 otherwise
