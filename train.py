@@ -28,12 +28,12 @@ def build_network(snapshot, backend):
     epoch = 0
     backend = backend.lower()
     net = models[backend]()
+    net = nn.DataParallel(net)
     if snapshot is not None:
         _, epoch = os.path.basename(snapshot).split('_')
         epoch = int(epoch)
         net.load_state_dict(torch.load(snapshot))
         logging.info("Snapshot for epoch {} loaded from {}".format(epoch, snapshot))
-    net = nn.DataParallel(net)
     net = net.cuda()
     return net, epoch
 
