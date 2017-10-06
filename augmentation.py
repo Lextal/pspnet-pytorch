@@ -2,6 +2,7 @@ import random
 import numbers
 import math
 import collections
+
 from PIL import ImageOps, Image
 import numpy as np
 
@@ -14,7 +15,7 @@ class Padding:
         return ImageOps.expand(img, border=self.pad, fill=0)
 
 
-class Scale(object):
+class Scale:
     def __init__(self, size, interpolation=Image.NEAREST):
         assert isinstance(size, int) or (isinstance(size, collections.Iterable) and len(size) == 2)
         self.size = size
@@ -38,7 +39,7 @@ class Scale(object):
             return img.resize(self.size, self.interpolation), target.resize(self.size, self.interpolation)
 
 
-class CenterCrop(object):
+class CenterCrop:
     def __init__(self, size):
         if isinstance(size, numbers.Number):
             self.size = (int(size), int(size))

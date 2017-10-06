@@ -1,15 +1,16 @@
+import os
+
 from torch import nn
 from torch import optim
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
-from pspnet import PSPNet
-
 from tqdm import tqdm
 import click
-import os
 import numpy as np
+
+from pspnet import PSPNet
 
 
 models = {
@@ -92,6 +93,6 @@ def train(data_path, models_path, backend, snapshot, crop_x, crop_y, batch_size,
         torch.save(net.state_dict(), os.path.join(models_path, '_'.join(["PSPNet", str(epoch + 1)])))
         train_loss = np.mean(epoch_losses)
 
-
+        
 if __name__ == '__main__':
     train()

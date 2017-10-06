@@ -1,12 +1,12 @@
+from collections import OrderedDict
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils import model_zoo
 from torchvision.models.densenet import densenet121, densenet161
 from torchvision.models.squeezenet import squeezenet1_1
-
-from collections import OrderedDict
-import math
 
 
 def load_weights_sequential(target, source_state):
